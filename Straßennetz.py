@@ -501,16 +501,19 @@ folium.Marker(start_coords, tooltip="Start: Gesamtschule Eiserfeld", icon=folium
 folium.Marker(ziel_coords, tooltip="Ziel: Siegen", icon=folium.Icon(color="red")).add_to(m)
 
 # Unfall-Heatmap (sample falls sehr viele Punkte)
-gdf_acc_plot = gdf_acc.to_crs(4326)
-n_points = len(gdf_acc_plot)
-max_points = 5000
-if n_points > max_points:
-    sample = gdf_acc_plot.sample(max_points)
+if gdf_acc is not None:
+    gdf_acc_plot = gdf_acc.to_crs(4326)
+    n_points = len(gdf_acc_plot)
+    max_points = 5000
+    if n_points > max_points:
+        sample = gdf_acc_plot.sample(max_points)
+    else:
+        sample = gdf_acc_plot
+    if len(sample) > 0:
+        heat_data = [[pt.y, pt.x] for pt in sample.geometry]
+        HeatMap(heat_data, radius=7, blur=12, name='Unfall-Heatmap').add_to(m)
 else:
-    sample = gdf_acc_plot
-if gdf_acc is not None and len(sample) > 0:
-    heat_data = [[pt.y, pt.x] for pt in sample.geometry]
-    HeatMap(heat_data, radius=7, blur=12, name='Unfall-Heatmap').add_to(m)
+    gdf_acc_plot = None
 
 def route_coords_from_nodes(node_list):
     coords = []
@@ -620,29 +623,31 @@ def build_popup(acc):
             lines.append(f"{col}: {acc[col]}")
     return f"Unfallpunkt:<br>Lat: {acc['YGCSWGS84']}<br>Lon: {acc['XGCSWGS84']}<br>" + "<br>".join(lines)
 
-for _, acc in on_route.iterrows():
-    popup_text = build_popup(acc)
-    folium.CircleMarker(
-        location=[acc.geometry.y, acc.geometry.x],
-        radius=5,
-        color="black",
-        fill=True,
-        fill_color="orange",
-        fill_opacity=0.95,
-        popup=folium.Popup(popup_text, max_width=350)
-    ).add_to(m)
+if hasattr(on_route, "iterrows"):
+    for _, acc in on_route.iterrows():
+        popup_text = build_popup(acc)
+        folium.CircleMarker(
+            location=[acc.geometry.y, acc.geometry.x],
+            radius=5,
+            color="black",
+            fill=True,
+            fill_color="orange",
+            fill_opacity=0.95,
+            popup=folium.Popup(popup_text, max_width=350)
+        ).add_to(m)
 
-for _, acc in near_route.iterrows():
-    popup_text = build_popup(acc)
-    folium.CircleMarker(
-        location=[acc.geometry.y, acc.geometry.x],
-        radius=4,
-        color="black",
-        fill=True,
-        fill_color="blue",
-        fill_opacity=0.6,
-        popup=folium.Popup("In Nähe der Route:<br>" + popup_text, max_width=350)
-    ).add_to(m)
+if hasattr(near_route, "iterrows"):
+    for _, acc in near_route.iterrows():
+        popup_text = build_popup(acc)
+        folium.CircleMarker(
+            location=[acc.geometry.y, acc.geometry.x],
+            radius=4,
+            color="black",
+            fill=True,
+            fill_color="blue",
+            fill_opacity=0.6,
+            popup=folium.Popup("In Nähe der Route:<br>" + popup_text, max_width=350)
+        ).add_to(m)
 
 # Karte speichern und öffnen
 # Speicherort so wählen, dass GitHub Pages sie direkt ausliefert: ./docs/index.html
