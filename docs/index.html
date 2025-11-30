@@ -558,7 +558,21 @@ function draw() {
     
     const drawnEdges = new Set();
     
-    // Kanten
+    // 1. ZUERST: Pfad zeichnen (unter allem anderen)
+    if (path.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(nodes[path[0]].x, nodes[path[0]].y);
+        for (let i = 1; i < path.length; i++) {
+            ctx.lineTo(nodes[path[i]].x, nodes[path[i]].y);
+        }
+        ctx.strokeStyle = '#5CC5A7';
+        ctx.lineWidth = 8;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+    }
+    
+    // 2. Kanten (über dem Pfad)
     for (const key in edges) {
         const [u, v] = key.split('-').map(Number);
         const edgeId = Math.min(u, v) + '-' + Math.max(u, v);
@@ -576,7 +590,7 @@ function draw() {
         ctx.lineWidth = 3;
         ctx.stroke();
         
-        // Unfälle
+        // 3. Unfälle (über Kanten)
         const edge = edges[key];
         const showN = Math.max(1, Math.round(density * edge.accidents.length));
         const step = Math.max(1, Math.floor(edge.accidents.length / showN));
@@ -586,9 +600,12 @@ function draw() {
             ctx.arc(a.x, a.y, 6, 0, Math.PI * 2);
             ctx.fillStyle = '#FF9FB3';
             ctx.fill();
+            ctx.strokeStyle = '#E8758A';
+            ctx.lineWidth = 1;
+            ctx.stroke();
         }
         
-        // Gewicht-Label
+        // 4. Gewicht-Label (ganz oben)
         const mx = (p1.x + p2.x) / 2;
         const my = (p1.y + p2.y) / 2;
         ctx.beginPath();
@@ -603,18 +620,6 @@ function draw() {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(edge.weight, mx, my);
-    }
-    
-    // Pfad
-    if (path.length > 1) {
-        ctx.beginPath();
-        ctx.moveTo(nodes[path[0]].x, nodes[path[0]].y);
-        for (let i = 1; i < path.length; i++) {
-            ctx.lineTo(nodes[path[i]].x, nodes[path[i]].y);
-        }
-        ctx.strokeStyle = '#5CC5A7';
-        ctx.lineWidth = 6;
-        ctx.stroke();
     }
     
     // Knoten
