@@ -289,8 +289,35 @@ joined = gpd.sjoin(gdf_acc, buffers[["geometry"]], how="left", predicate="within
 counts = joined.groupby("index_right").size()
 edges_gdf["accidents"] = counts.reindex(edges_gdf.index).fillna(0).astype(int)
 
-# Risiko definieren (Unfälle pro km)
-edges_gdf["risk"] = edges_gdf.apply(lambda r: r["accidents"] / (max(r["length"], 1) / 1000.0), axis=1)
+# Risiko definieren gemäß Facharbeit-Formel:
+# R_base(e) = (A(e) + alpha) / L(e)  (L in km)
+# R(e) = R_base(e) * beta(e)
+# Laplace-Glättungsparameter
+alpha = 1.0
+
+def beta_factor(h):
+    if h is None:
+        return 1.0
+    if isinstance(h, (list, tuple)) and h:
+        h = h[0]
+    h = str(h).lower()
+    mapping = {
+        'motorway': 0.6,
+        'primary': 0.8,
+        'secondary': 1.0,
+        'residential': 1.5,
+        'service': 2.0
+    }
+    return mapping.get(h, 1.0)
+
+def compute_risk(row):
+    length_km = max(row['length'] / 1000.0, 1e-6)
+    A = int(row['accidents'])
+    base = (A + alpha) / length_km
+    b = beta_factor(row.get('highway'))
+    return base * b
+
+edges_gdf["risk"] = edges_gdf.apply(compute_risk, axis=1)
 
 # Straßenklassen-Strafe basierend auf OSM 'highway' Tag
 def highway_penalty_tag(h):
@@ -320,12 +347,29 @@ edges_gdf['road_penalty'] = edges_gdf['highway'].apply(highway_penalty_tag)
 
 # Normalisieren
 max_len = edges_gdf["length"].max() or 1.0
+# Zeit (T) pro Kante schätzen: Länge / typische Geschwindigkeit (sek)
+def estimate_edge_time_seconds(length_m, highway_tag):
+    # use default highway speeds for approximation
+    try:
+        speed_kmh = _default_speed_for_highway(highway_tag)
+    except Exception:
+        speed_kmh = 40.0
+    speed_mps = max(0.1, speed_kmh * 1000.0 / 3600.0)
+    return length_m / speed_mps
+
+edges_gdf['time_sec'] = edges_gdf.apply(lambda r: estimate_edge_time_seconds(r['length'], r.get('highway')), axis=1)
+
+# normalize length via max length and risk via max risk, time via max time
 max_risk = edges_gdf["risk"].max()
 if not max_risk or max_risk <= 0:
     max_risk = 1.0
+max_time = edges_gdf['time_sec'].max() if 'time_sec' in edges_gdf.columns else 1.0
+if not max_time or max_time <= 0:
+    max_time = 1.0
 
 edges_gdf["len_norm"] = edges_gdf["length"] / max_len
 edges_gdf["risk_norm"] = edges_gdf["risk"] / max_risk
+edges_gdf['time_norm'] = edges_gdf['time_sec'] / max_time
 
 # Gewichte – leichte ML-basierte Anpassung zur Bewertung von Straßen (bevorzuge Hauptstraßen)
 mix_param = 0.5
@@ -422,20 +466,24 @@ edges_gdf['ai_weight_fast'] = 1.0 + (1.0 - p_main) * ai_strengths['fast']
 edges_gdf['ai_weight_safe'] = 1.0 + (1.0 - p_main) * ai_strengths['safe']
 edges_gdf['ai_weight_mix'] = 1.0 + (1.0 - p_main) * ai_strengths['mix']
 
-# final weights: use simple normalized cost functions (user-proposed)
-# - fast:  0.9 * length_norm + 0.1 * risk_norm
-# - safe:  risk_norm (minimize risk)
-# - mix:   0.55 * length_norm + 0.45 * risk_norm
-# These are in [0,1]; if you want to keep AI/road-penalties multiply afterwards.
-edges_gdf["weight_fast"] = 0.9 * edges_gdf["len_norm"] + 0.1 * edges_gdf["risk_norm"]
-edges_gdf["weight_safe"] = edges_gdf["risk_norm"]
-edges_gdf["weight_mix"] = 0.55 * edges_gdf["len_norm"] + 0.45 * edges_gdf["risk_norm"]
+# Build combined weights using the paper-style W_lambda = (1-lambda) * T_norm + lambda * R_norm
+# Choose lambda per preference: small lambda -> time-focused, large lambda -> risk-focused
+lambda_values = {
+    'fast': 0.1,
+    'safe': 1.0,
+    'mix': 0.45
+}
 
-# Optional: re-apply road/AI penalties so that e.g. 'safe' still prefers main roads when desired.
-# If you prefer the pure normalized costs above, comment out the next three lines.
-edges_gdf["weight_fast"] = edges_gdf["weight_fast"] * edges_gdf["highway_weight"] * edges_gdf["road_penalty"] * edges_gdf["ai_weight_fast"]
-edges_gdf["weight_safe"] = edges_gdf["weight_safe"] * edges_gdf["highway_weight"] * edges_gdf["road_penalty"] * edges_gdf["ai_weight_safe"]
-edges_gdf["weight_mix"] = edges_gdf["weight_mix"] * edges_gdf["highway_weight"] * edges_gdf["road_penalty"] * edges_gdf["ai_weight_mix"]
+for kind, lam in lambda_values.items():
+    edges_gdf[f'W_base_{kind}'] = (1.0 - lam) * edges_gdf['time_norm'] + lam * edges_gdf['risk_norm']
+
+# Use these W_base_* as the final weights for shortest_path (non-negative, normalized)
+edges_gdf['weight_fast'] = edges_gdf['W_base_fast']
+edges_gdf['weight_safe'] = edges_gdf['W_base_safe']
+edges_gdf['weight_mix'] = edges_gdf['W_base_mix']
+
+# NOTE: If you want to re-introduce highway/AI penalties multiply here, e.g.:
+# edges_gdf['weight_fast'] *= edges_gdf['highway_weight'] * edges_gdf['road_penalty'] * edges_gdf['ai_weight_fast']
 
 # Baue gerichteten Graphen mit minimalen Gewichten pro (u,v)
 H = nx.DiGraph()
